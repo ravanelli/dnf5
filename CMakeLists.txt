@@ -130,7 +130,7 @@ add_subdirectory("include")
 add_subdirectory("libdnf5")
 add_subdirectory("libdnf5-cli")
 add_subdirectory("libdnf5-plugins")
-add_subdirectory("doc")
+#add_subdirectory("doc")
 add_subdirectory("bindings")
 
 # dnf5daemon

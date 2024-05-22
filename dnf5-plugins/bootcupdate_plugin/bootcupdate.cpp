@@ -31,19 +31,17 @@ along with libdnf.  If not, see <https://www.gnu.org/licenses/>.
 #include <rpm/rpmlib.h>
 #include <rpm/rpmmacro.h>
 #include <rpm/rpmts.h>
-
 #include <iostream>
 
-
-#include <iostream>
-#include <fstream>
-#include <sstream>
-#include <cstdlib>
-#include <unistd.h>
 #include <sys/wait.h>
 #include <string>
 
+#include <cstdio>
+#include <cstdlib>
+#include <unistd.h>
+#include <filesystem>
 
+namespace fs = std::filesystem;
 namespace dnf5 {
 
 using namespace libdnf5::cli;
@@ -63,52 +61,44 @@ void BootcUpdateCommand::set_argument_parser() {
     cmd.set_description("Update image-base systems via bootc");
     if (is_container()) {
         std::cout << "System is managed as an immutable container." << std::endl;
+        int result = system("/usr/bin/bootc update");
+        if (result != 0) {
+           std::cerr << "Error: Command execution failed with exit code " << result << std::endl;
+        } else {
+            std::cout << "bootc update command executed successfully." << std::endl;
+    }      
     } else {
-        std::cout << "System is not managed as an immutable container." << std::endl;
+        std::cout << "NOT managed as an immutable container." << std::endl;
     }
 }
 
-
 bool is_container() {
-    std::string bootc = "/usr/bin/bootc";
-    std::string ostree = "/sysroot/ostree";
+    const std::string bootc = "/usr/bin/bootc";
+    const std::string ostree = "/sysroot/ostree";
 
-    // TODO forking is better?
     if (access(bootc.c_str(), X_OK) == 0) {
-        pid_t pid = fork();
-
-        if (pid == 0) {
-            execl(bootc.c_str(), bootc.c_str(), "status", "--json", nullptr);
-            exit(EXIT_FAILURE);
-        } else if (pid > 0) {
-            int status;
-            waitpid(pid, &status, 0);
-
-            if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-                std::ifstream ifs("/tmp/bootc_status.json");
-                if (ifs.is_open()) {
-                    std::stringstream buffer;
-                    buffer << ifs.rdbuf();
-                    std::string json_str = buffer.str();
-                    ifs.close();
-
-                    size_t isContainerPos = json_str.find("\"isContainer\":true");
-                    if (isContainerPos != std::string::npos) {
-                        size_t kindPos = json_str.find("\"kind\":\"bootchost\"", isContainerPos);
-                        if (kindPos != std::string::npos)
-                            return true;
-                    }
-                }
-            }
+        FILE* pipe = popen((bootc + " status --json").c_str(), "r");
+        if (!pipe) {
+            std::cerr << "Error: Failed to execute bootc." << std::endl;
+            return false;
         }
-    // TODO we only warn here? And only call bootc if it is true	
-    } else if (access(ostree.c_str(), F_OK) == 0) {
+
+        // Read the entire JSON string into a std::string
+        std::string json_output;
+        char buffer[128];
+        while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+            json_output += buffer;
+        }
+        pclose(pipe);
+        if (json_output.find("\"type\":\"bootcHost\"") != std::string::npos) {
+            return true;
+        }
+    } else if (fs::is_directory(ostree)) { 
         return true;
     }
 
     return false;
 }
-
 
 void BootcUpdateCommand::configure() {
     if (!pkg_specs.empty()) {
@@ -120,124 +110,6 @@ void BootcUpdateCommand::configure() {
     context.set_load_available_repos(Context::LoadAvailableRepos::ENABLED);
 }
 
-void BootcUpdateCommand::parse_bootcupdate_specs(int specs_count, const char * const specs[]) {
-    const std::string_view ext_spec(".spec");
-    const std::string_view ext_srpm(".src.rpm");
-    const std::string_view ext_nosrpm(".nosrc.rpm");
-    std::set<std::string> unique_items;
-    for (int i = 0; i < specs_count; ++i) {
-        const std::string_view spec(specs[i]);
-        if (auto [it, inserted] = unique_items.emplace(spec); inserted) {
-            // TODO(mblaha): download remote URLs to temporary location + remove them afterwards
-            if (spec.ends_with(ext_spec)) {
-                spec_file_paths.emplace_back(spec);
-            } else if (spec.ends_with(ext_srpm) || spec.ends_with(ext_nosrpm)) {
-                srpm_file_paths.emplace_back(spec);
-            } else {
-                pkg_specs.emplace_back(spec);
-            }
-        }
-    }
-}
-
-bool BootcUpdateCommand::add_from_spec_file(
-    std::set<std::string> & install_specs, std::set<std::string> & conflicts_specs, const char * spec_file_name) {
-    auto spec = rpmSpecParse(spec_file_name, RPMSPEC_ANYARCH | RPMSPEC_FORCE, nullptr);
-    if (spec == nullptr) {
-        std::cerr << "Failed to parse spec file \"" << spec_file_name << "\"." << std::endl;
-        return false;
-    }
-    auto dependency_set = rpmdsInit(rpmSpecDS(spec, RPMTAG_REQUIRENAME));
-    while (rpmdsNext(dependency_set) >= 0) {
-        install_specs.emplace(rpmdsDNEVR(dependency_set) + 2);
-    }
-    rpmdsFree(dependency_set);
-    auto conflicts_set = rpmdsInit(rpmSpecDS(spec, RPMTAG_CONFLICTNAME));
-    while (rpmdsNext(conflicts_set) >= 0) {
-        conflicts_specs.emplace(rpmdsDNEVR(conflicts_set) + 2);
-    }
-    rpmdsFree(conflicts_set);
-    rpmSpecFree(spec);
-    return true;
-}
-
-bool BootcUpdateCommand::add_from_srpm_file(
-    std::set<std::string> & install_specs, std::set<std::string> & conflicts_specs, const char * srpm_file_name) {
-    auto fd = Fopen(srpm_file_name, "r");
-    if (fd == NULL || Ferror(fd)) {
-        std::cerr << "Failed to open \"" << srpm_file_name << "\": " << Fstrerror(fd) << std::endl;
-        if (fd) {
-            Fclose(fd);
-            fd = nullptr;
-        }
-        return false;
-    }
-
-    Header header;
-    auto ts = rpmtsCreate();
-    rpmtsSetVSFlags(ts, _RPMVSF_NOSIGNATURES | _RPMVSF_NODIGESTS);
-    auto rc = rpmReadPackageFile(ts, fd, nullptr, &header);
-    rpmtsFree(ts);
-    Fclose(fd);
-    fd = nullptr;
-
-    if (rc == RPMRC_OK) {
-        auto dependency_set = rpmdsInit(rpmdsNewPool(nullptr, header, RPMTAG_REQUIRENAME, 0));
-        while (rpmdsNext(dependency_set) >= 0) {
-            std::string_view reldep = rpmdsDNEVR(dependency_set) + 2;
-            if (!reldep.starts_with("rpmlib(")) {
-                install_specs.emplace(reldep);
-            }
-        }
-        rpmdsFree(dependency_set);
-        auto conflicts_set = rpmdsInit(rpmdsNewPool(nullptr, header, RPMTAG_CONFLICTNAME, 0));
-        while (rpmdsNext(conflicts_set) >= 0) {
-            conflicts_specs.emplace(rpmdsDNEVR(conflicts_set) + 2);
-        }
-        rpmdsFree(conflicts_set);
-    } else {
-        std::cerr << "Failed to read rpm file \"" << srpm_file_name << "\"." << std::endl;
-    }
-
-    headerFree(header);
-    return true;
-}
-
-bool BootcUpdateCommand::add_from_pkg(
-    std::set<std::string> & install_specs, std::set<std::string> & conflicts_specs, const std::string & pkg_spec) {
-    auto & ctx = get_context();
-
-    libdnf5::rpm::PackageQuery pkg_query(ctx.get_base());
-    libdnf5::ResolveSpecSettings settings;
-    settings.set_with_provides(false);
-    settings.set_with_filenames(false);
-    settings.set_with_binaries(false);
-    settings.set_expand_globs(false);
-    pkg_query.resolve_pkg_spec(pkg_spec, settings, false);
-
-    std::vector<std::string> source_names{pkg_spec};
-    for (const auto & pkg : pkg_query) {
-        source_names.emplace_back(pkg.get_source_name());
-    }
-
-    libdnf5::rpm::PackageQuery source_pkgs(ctx.get_base());
-    source_pkgs.filter_arch(std::vector<std::string>{"src", "nosrc"});
-    source_pkgs.filter_name(source_names);
-    if (source_pkgs.empty()) {
-        std::cerr << "No package matched \"" << pkg_spec << "\"." << std::endl;
-        return false;
-    } else {
-        for (const auto & pkg : source_pkgs) {
-            for (const auto & reldep : pkg.get_requires()) {
-                install_specs.emplace(reldep.to_string());
-            }
-            for (const auto & reldep : pkg.get_conflicts()) {
-                conflicts_specs.emplace(reldep.to_string());
-            }
-        }
-        return true;
-    }
-}
 
 void BootcUpdateCommand::run() {
     // get build dependencies from various inputs
@@ -331,5 +203,4 @@ void BootcUpdateCommand::goal_resolved() {
         }
     }
 }
-
 }  // namespace dnf5

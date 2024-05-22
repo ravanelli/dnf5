@@ -692,6 +692,7 @@ Requires:       dnf5%{?_isa} = %{version}-%{release}
 Requires:       libcurl%{?_isa} >= 7.62.0
 Requires:       libdnf5-cli%{?_isa} = %{version}-%{release}
 Provides:       dnf5-command(builddep)
+Provides:       dnf5-command(bootcupdate)
 Provides:       dnf5-command(changelog)
 Provides:       dnf5-command(config-manager)
 Provides:       dnf5-command(copr)
@@ -702,8 +703,9 @@ Provides:       dnf5-command(repoclosure)
 Core DNF5 plugins that enhance dnf5 with builddep, changelog,
 config-manager, copr, and repoclosure commands.
 
-%files -n dnf5-plugins -f dnf5-plugin-builddep.lang -f dnf5-plugin-changelog.lang -f dnf5-plugin-config-manager.lang -f dnf5-plugin-copr.lang -f dnf5-plugin-needs-restarting.lang -f dnf5-plugin-repoclosure.lang
+%files -n dnf5-plugins -f dnf5-plugin-builddep.lang -f dnf5-plugin-changelog.lang -f dnf5-plugin-config-manager.lang -f dnf5-plugin-copr.lang -f dnf5-plugin-needs-restarting.lang -f dnf5-plugin-repoclosure.lang  -f dnf5-plugin-bootcupdate.lang
 %{_libdir}/dnf5/plugins/builddep_cmd_plugin.so
+%{_libdir}/dnf5/plugins/bootcupgdate_cmd_plugin.so
 %{_libdir}/dnf5/plugins/changelog_cmd_plugin.so
 %{_libdir}/dnf5/plugins/config-manager_cmd_plugin.so
 %{_libdir}/dnf5/plugins/copr_cmd_plugin.so
@@ -846,6 +848,7 @@ popd
 %find_lang dnf5
 %find_lang dnf5-plugin-automatic
 %find_lang dnf5-plugin-builddep
+%find_lang dnf5-plugin-bootcupdate
 %find_lang dnf5-plugin-changelog
 %find_lang dnf5-plugin-config-manager
 %find_lang dnf5-plugin-copr
@@ -861,6 +864,9 @@ popd
 %ldconfig_scriptlets
 
 %changelog
+* Wed May 22 2024 Renata <rravanel@redhat.com> 5.2.0.0-1
+- new package built with tito
+
 * Wed Apr 24 2024 Packit Team <hello@packit.dev> - 5.2.0.0-1
 - New upstream release 5.2.0.0
 

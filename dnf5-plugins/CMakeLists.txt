@@ -9,6 +9,7 @@ set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -Wl,-z,undefs")
 
 add_subdirectory("automatic_plugin")
 add_subdirectory("builddep_plugin")
+add_subdirectory("bootcupdate_plugin")
 add_subdirectory("changelog_plugin")
 add_subdirectory("config-manager_plugin")
 add_subdirectory("copr_plugin")
